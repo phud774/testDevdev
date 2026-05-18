@@ -1,0 +1,17 @@
+venv/
+data/
+parquet_reports/
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+.ipynb_checkpoints/
+.env
+.env.*
+
+feature_correlation*.csv
+submission*.json
+validation_*_submission.json
+test_*_submission.json
+test_*_submission.pkl
