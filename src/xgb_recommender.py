@@ -97,10 +97,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_train_months(args: argparse.Namespace) -> list[str]:
-    if args.predict_jan_2026:
-        return previous_months(args.val_month, 11)
     if args.train_months:
         return [month.strip() for month in args.train_months.split(",") if month.strip()]
+    if args.predict_jan_2026:
+        return previous_months(args.val_month, 11)
     return [month_minus(args.val_month, 2), month_minus(args.val_month, 1)]
 
 
