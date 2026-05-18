@@ -8,7 +8,7 @@ from recommender.dataset import build_training_dataset_for_month
 from recommender.evaluation import evaluate_submission_dict
 from recommender.inference import evaluate_month_chunked, predict_month_chunked
 from recommender.model import train_xgboost
-from recommender.time_utils import month_minus
+from recommender.time_utils import month_minus, previous_months
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,13 +71,39 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use the validation-trained model for test prediction instead of refitting on train + validation.",
     )
+    parser.add_argument(
+        "--predict-jan-2026",
+        action="store_true",
+        help=(
+            "Special final prediction mode: train on label months 2025-01..2025-12, "
+            "then predict 2026-01 for every historical user before 2026-01-01."
+        ),
+    )
+    parser.add_argument(
+        "--predict-all-history-users",
+        action="store_true",
+        help="During test prediction, score every user seen before --test-month instead of users active in --test-month.",
+    )
     return parser.parse_args()
 
 
 def resolve_train_months(args: argparse.Namespace) -> list[str]:
+    if args.predict_jan_2026:
+        return previous_months(args.val_month, 11)
     if args.train_months:
         return [month.strip() for month in args.train_months.split(",") if month.strip()]
     return [month_minus(args.val_month, 2), month_minus(args.val_month, 1)]
+
+
+def configure_special_modes(args: argparse.Namespace) -> None:
+    if not args.predict_jan_2026:
+        return
+    args.test_month = "2026-01"
+    args.val_month = "2025-12"
+    args.predict_all_history_users = True
+    args.no_refit_on_validation = False
+    if args.submission == "submission_xgb.json":
+        args.submission = "submission_2026-01.json"
 
 
 def build_train_frame(lf, train_months: list[str], args: argparse.Namespace, item_lf=None) -> pd.DataFrame:
@@ -113,6 +139,7 @@ def best_tree_count(model, default_n_estimators: int) -> int:
 
 def main() -> None:
     args = parse_args()
+    configure_special_modes(args)
     data_path = Path(args.data)
     gt_path = Path(args.ground_truth)
     submission_path = Path(args.submission)
@@ -171,6 +198,7 @@ def main() -> None:
         submission_path,
         ground_truth_path=gt_path if gt_path.exists() else None,
         item_lf=item_lf,
+        all_history_users=args.predict_all_history_users,
     )
     print(f"\nSaved {len(submission):,} users to {submission_path}")
     if args.evaluate_test_month:

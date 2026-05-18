@@ -9,7 +9,7 @@ from sklearn.metrics import log_loss
 
 from .candidates import build_candidates
 from .constants import DATE_COL, FEATURE_COLS, ITEM_COL, USER_COL
-from .data import iter_user_chunks, target_users_for_month
+from .data import iter_user_chunks, target_users_for_month, users_before_cutoff
 from .dataset import add_labels, build_dataset_for_users
 from .evaluation import CandidateCoverageStats, load_candidate_coverage_stats, precision_at_10_from_scores
 from .features import add_features
@@ -61,18 +61,22 @@ def predict_month_chunked(
     output_path: Path,
     ground_truth_path: Path | None = None,
     item_lf: pl.LazyFrame | None = None,
+    all_history_users: bool = False,
 ) -> dict[str, list[str]]:
     target = parse_month(target_month)
     use_ground_truth_users = (
         getattr(args, "use_ground_truth_users", False)
         or getattr(args, "test_users_from_ground_truth", False)
     )
-    users = target_users_for_month(
-        lf,
-        target,
-        args.max_test_users,
-        ground_truth_path=ground_truth_path if use_ground_truth_users else None,
-    )
+    if all_history_users:
+        users = users_before_cutoff(lf, target.start, args.max_test_users)
+    else:
+        users = target_users_for_month(
+            lf,
+            target,
+            args.max_test_users,
+            ground_truth_path=ground_truth_path if use_ground_truth_users else None,
+        )
     n_chunks = (users.height + args.user_chunk_size - 1) // args.user_chunk_size
     submission: dict[str, list[str]] = {}
     coverage_stats = (
@@ -82,7 +86,8 @@ def predict_month_chunked(
     )
 
     print(f"\nPredicting {target_month} by chunks")
-    print(f"Target users: {users.height:,} | chunk size: {args.user_chunk_size:,}")
+    user_source = "all historical users" if all_history_users else "target-month users"
+    print(f"Target users: {users.height:,} ({user_source}) | chunk size: {args.user_chunk_size:,}")
     for chunk_id, user_chunk in iter_user_chunks(users, args.user_chunk_size):
         scored = build_scored_chunk(model, lf, user_chunk, target_month, args, item_lf=item_lf)
         if coverage_stats is not None:

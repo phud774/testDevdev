@@ -23,3 +23,6 @@ def month_minus(month: str, n: int) -> str:
         mon += 12
     return f"{year:04d}-{mon:02d}"
 
+
+def previous_months(month: str, n: int) -> list[str]:
+    return [month_minus(month, offset) for offset in range(n, 0, -1)]

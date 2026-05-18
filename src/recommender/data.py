@@ -93,6 +93,22 @@ def target_users_for_month(
     return users
 
 
+def users_before_cutoff(
+    lf: pl.LazyFrame,
+    cutoff: datetime,
+    max_users: int | None = None,
+) -> pl.DataFrame:
+    users = (
+        lf.filter(pl.col(DATE_COL) < cutoff)
+        .select(USER_COL)
+        .unique()
+        .collect(engine="streaming")
+    )
+    if max_users:
+        users = users.sample(n=min(max_users, users.height), seed=42)
+    return users
+
+
 def iter_user_chunks(users: pl.DataFrame, chunk_size: int):
     for start in range(0, users.height, chunk_size):
         yield start // chunk_size + 1, users.slice(start, chunk_size)
