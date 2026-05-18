@@ -25,6 +25,30 @@ def top_k_from_scored(df: pd.DataFrame, k: int = 10) -> dict[str, list[str]]:
     }
 
 
+class SubmissionResult(dict):
+    def __init__(self, saved_count: int, data: dict[str, list[str]] | None = None):
+        super().__init__(data or {})
+        self.saved_count = saved_count
+
+    def __len__(self) -> int:
+        return self.saved_count
+
+
+def write_submission_entries(
+    output_file,
+    predictions: dict[str, list[str]],
+    first_entry: bool,
+) -> bool:
+    for user_id, items in predictions.items():
+        if not first_entry:
+            output_file.write(",\n")
+        output_file.write(json.dumps(user_id, ensure_ascii=False))
+        output_file.write(": ")
+        output_file.write(json.dumps(items, ensure_ascii=False))
+        first_entry = False
+    return first_entry
+
+
 def build_scored_chunk(
     model,
     lf: pl.LazyFrame,
@@ -45,6 +69,7 @@ def build_scored_chunk(
         recent_days=args.recent_days,
         recent_global_top=args.popular_top,
         recent_location_top=args.location_top,
+        cobuy_top=args.cobuy_top,
     )
     features = add_features(lf, candidates, cutoff=target.start, item_lf=item_lf)
     pdf = features.to_pandas()
@@ -92,31 +117,53 @@ def predict_month_chunked(
         n_chunks = (users.height + args.user_chunk_size - 1) // args.user_chunk_size
         target_user_count = f"{users.height:,}"
     submission: dict[str, list[str]] = {}
+    saved_users = 0
     coverage_stats = (
         load_candidate_coverage_stats(ground_truth_path)
         if use_ground_truth_users or getattr(args, "eval_ground_truth", False)
         else None
     )
+    stream_output = all_history_users and coverage_stats is None
 
     print(f"\nPredicting {target_month} by chunks")
     user_source = "all historical users" if all_history_users else "target-month users"
     print(f"Target users: {target_user_count} ({user_source}) | chunk size: {args.user_chunk_size:,}")
-    for chunk_id, user_chunk in user_chunks:
-        chunk_label = f"{chunk_id:,}/{n_chunks:,}" if n_chunks else f"{chunk_id:,}"
-        scored = build_scored_chunk(model, lf, user_chunk, target_month, args, item_lf=item_lf)
-        if coverage_stats is not None:
-            coverage_stats.update_from_frame(scored[[USER_COL, ITEM_COL]])
-        submission.update(top_k_from_scored(scored, k=10))
-        print(
-            f"  chunk {chunk_label}: users={user_chunk.height:,}, "
-            f"candidates={len(scored):,}, saved_users={len(submission):,}"
-        )
-        del scored
+    if stream_output:
+        with output_path.open("w", encoding="utf-8") as f:
+            f.write("{\n")
+            first_entry = True
+            for chunk_id, user_chunk in user_chunks:
+                chunk_label = f"{chunk_id:,}/{n_chunks:,}" if n_chunks else f"{chunk_id:,}"
+                scored = build_scored_chunk(model, lf, user_chunk, target_month, args, item_lf=item_lf)
+                chunk_predictions = top_k_from_scored(scored, k=10)
+                first_entry = write_submission_entries(f, chunk_predictions, first_entry)
+                saved_users += len(chunk_predictions)
+                print(
+                    f"  chunk {chunk_label}: users={user_chunk.height:,}, "
+                    f"candidates={len(scored):,}, saved_users={saved_users:,}"
+                )
+                del chunk_predictions, scored
+            f.write("\n}")
+    else:
+        for chunk_id, user_chunk in user_chunks:
+            chunk_label = f"{chunk_id:,}/{n_chunks:,}" if n_chunks else f"{chunk_id:,}"
+            scored = build_scored_chunk(model, lf, user_chunk, target_month, args, item_lf=item_lf)
+            if coverage_stats is not None:
+                coverage_stats.update_from_frame(scored[[USER_COL, ITEM_COL]])
+            chunk_predictions = top_k_from_scored(scored, k=10)
+            submission.update(chunk_predictions)
+            print(
+                f"  chunk {chunk_label}: users={user_chunk.height:,}, "
+                f"candidates={len(scored):,}, saved_users={len(submission):,}"
+            )
+            del chunk_predictions, scored
 
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(submission, f, ensure_ascii=False)
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(submission, f, ensure_ascii=False)
     if coverage_stats is not None:
         coverage_stats.print_summary()
+    if stream_output:
+        return SubmissionResult(saved_users)
     return submission
 
 
@@ -170,6 +217,7 @@ def evaluate_month_chunked(
             recent_days=args.recent_days,
             recent_global_top=args.popular_top,
             recent_location_top=args.location_top,
+            cobuy_top=args.cobuy_top,
         )
         coverage_stats.ground_truth.update(validation_truth_for_users(lf, user_chunk, target_month))
         coverage_stats.update_from_frame(candidates[[USER_COL, ITEM_COL]].to_pandas())

@@ -32,6 +32,7 @@ def build_candidates(
     recent_days: int,
     recent_global_top: int,
     recent_location_top: int,
+    cobuy_top: int = 20,
 ) -> pl.DataFrame:
     hist = history_before(lf, cutoff)
     user_lf = target_users.lazy()
@@ -129,46 +130,56 @@ def build_candidates(
         "candidate_recent_location",
     )
 
-    recent_user_items = (
-        recent_hist.join(user_lf, on=USER_COL, how="inner")
-        .group_by([USER_COL, ITEM_COL])
-        .agg(pl.len().alias("anchor_count"), pl.max(DATE_COL).alias("anchor_last_date"))
-        .sort([USER_COL, "anchor_count", "anchor_last_date"], descending=[False, True, True])
-        .group_by(USER_COL)
-        .head(min(personal_top, 40))
-        .rename({ITEM_COL: "anchor_item"})
-        .select(USER_COL, "anchor_item")
-    )
-    basket_items = personal_hist.select(BILL_COL, ITEM_COL).unique()
-    anchor_items = recent_user_items.select(pl.col("anchor_item").alias(ITEM_COL)).unique()
-    anchor_bills = basket_items.join(anchor_items, on=ITEM_COL, how="inner").rename(
-        {ITEM_COL: "anchor_item"}
-    )
-    basket_co_items = basket_items.rename({ITEM_COL: "co_item"})
-    co_items = (
-        anchor_bills.join(basket_co_items, on=BILL_COL, how="inner")
-        .filter(pl.col("anchor_item") != pl.col("co_item"))
-        .group_by(["anchor_item", "co_item"])
-        .agg(pl.len().alias("cobuy_count"))
-        .with_columns(
-            pl.col("cobuy_count")
-            .rank(method="ordinal", descending=True)
-            .over("anchor_item")
-            .alias("cobuy_rank")
+    if cobuy_top > 0 and personal_top > 0:
+        recent_user_items = (
+            recent_hist.join(user_lf, on=USER_COL, how="inner")
+            .group_by([USER_COL, ITEM_COL])
+            .agg(pl.len().alias("anchor_count"), pl.max(DATE_COL).alias("anchor_last_date"))
+            .sort([USER_COL, "anchor_count", "anchor_last_date"], descending=[False, True, True])
+            .group_by(USER_COL)
+            .head(min(personal_top, 40))
+            .rename({ITEM_COL: "anchor_item"})
+            .select(USER_COL, "anchor_item")
         )
-        .filter(pl.col("cobuy_rank") <= max(recent_location_top, 20))
-        .select("anchor_item", "co_item", "cobuy_count")
-    )
-    cobuy_candidates = (
-        recent_user_items.join(co_items, on="anchor_item", how="inner")
-        .group_by([USER_COL, "co_item"])
-        .agg(pl.sum("cobuy_count").alias("cobuy_score"))
-        .sort([USER_COL, "cobuy_score"], descending=[False, True])
-        .group_by(USER_COL)
-        .head(personal_top)
-        .rename({"co_item": ITEM_COL})
-    )
-    cobuy_candidates = _mark_source(cobuy_candidates, "candidate_cobuy")
+        basket_items = personal_hist.select(BILL_COL, ITEM_COL).unique()
+        anchor_items = recent_user_items.select(pl.col("anchor_item").alias(ITEM_COL)).unique()
+        anchor_bills = basket_items.join(anchor_items, on=ITEM_COL, how="inner").rename(
+            {ITEM_COL: "anchor_item"}
+        )
+        relevant_bills = anchor_bills.select(BILL_COL).unique()
+        basket_co_items = (
+            basket_items.join(relevant_bills, on=BILL_COL, how="inner")
+            .rename({ITEM_COL: "co_item"})
+        )
+        co_items = (
+            anchor_bills.join(basket_co_items, on=BILL_COL, how="inner")
+            .filter(pl.col("anchor_item") != pl.col("co_item"))
+            .group_by(["anchor_item", "co_item"])
+            .agg(pl.len().alias("cobuy_count"))
+            .with_columns(
+                pl.col("cobuy_count")
+                .rank(method="ordinal", descending=True)
+                .over("anchor_item")
+                .alias("cobuy_rank")
+            )
+            .filter(pl.col("cobuy_rank") <= cobuy_top)
+            .select("anchor_item", "co_item", "cobuy_count")
+        )
+        cobuy_candidates = (
+            recent_user_items.join(co_items, on="anchor_item", how="inner")
+            .group_by([USER_COL, "co_item"])
+            .agg(pl.sum("cobuy_count").alias("cobuy_score"))
+            .sort([USER_COL, "cobuy_score"], descending=[False, True])
+            .group_by(USER_COL)
+            .head(personal_top)
+            .rename({"co_item": ITEM_COL})
+        )
+        cobuy_candidates = _mark_source(cobuy_candidates, "candidate_cobuy")
+    else:
+        cobuy_candidates = _mark_source(
+            user_lf.select(USER_COL).head(0).with_columns(pl.lit("").alias(ITEM_COL)),
+            "candidate_cobuy",
+        )
 
     return (
         pl.concat(

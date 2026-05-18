@@ -58,6 +58,7 @@ def build_dataset_for_users(
         recent_days=args.recent_days,
         recent_global_top=args.popular_top,
         recent_location_top=args.location_top,
+        cobuy_top=args.cobuy_top,
     )
     features = add_features(lf, candidates, cutoff=target.start, item_lf=item_lf)
     labeled = add_labels(lf, features, target)
