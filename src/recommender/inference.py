@@ -9,7 +9,7 @@ from sklearn.metrics import log_loss
 
 from .candidates import build_candidates
 from .constants import DATE_COL, FEATURE_COLS, ITEM_COL, USER_COL
-from .data import iter_user_chunks, target_users_for_month, users_before_cutoff
+from .data import iter_user_chunks, iter_users_before_cutoff_from_parquet, target_users_for_month
 from .dataset import add_labels, build_dataset_for_users
 from .evaluation import CandidateCoverageStats, load_candidate_coverage_stats, precision_at_10_from_scores
 from .features import add_features
@@ -69,7 +69,18 @@ def predict_month_chunked(
         or getattr(args, "test_users_from_ground_truth", False)
     )
     if all_history_users:
-        users = users_before_cutoff(lf, target.start, args.max_test_users)
+        user_chunks = iter_users_before_cutoff_from_parquet(
+            Path(args.data),
+            target.start,
+            args.user_chunk_size,
+            args.max_test_users,
+        )
+        n_chunks = None
+        target_user_count = (
+            f"up to {args.max_test_users:,} streaming historical users"
+            if args.max_test_users
+            else "streaming all historical users"
+        )
     else:
         users = target_users_for_month(
             lf,
@@ -77,7 +88,9 @@ def predict_month_chunked(
             args.max_test_users,
             ground_truth_path=ground_truth_path if use_ground_truth_users else None,
         )
-    n_chunks = (users.height + args.user_chunk_size - 1) // args.user_chunk_size
+        user_chunks = iter_user_chunks(users, args.user_chunk_size)
+        n_chunks = (users.height + args.user_chunk_size - 1) // args.user_chunk_size
+        target_user_count = f"{users.height:,}"
     submission: dict[str, list[str]] = {}
     coverage_stats = (
         load_candidate_coverage_stats(ground_truth_path)
@@ -87,14 +100,15 @@ def predict_month_chunked(
 
     print(f"\nPredicting {target_month} by chunks")
     user_source = "all historical users" if all_history_users else "target-month users"
-    print(f"Target users: {users.height:,} ({user_source}) | chunk size: {args.user_chunk_size:,}")
-    for chunk_id, user_chunk in iter_user_chunks(users, args.user_chunk_size):
+    print(f"Target users: {target_user_count} ({user_source}) | chunk size: {args.user_chunk_size:,}")
+    for chunk_id, user_chunk in user_chunks:
+        chunk_label = f"{chunk_id:,}/{n_chunks:,}" if n_chunks else f"{chunk_id:,}"
         scored = build_scored_chunk(model, lf, user_chunk, target_month, args, item_lf=item_lf)
         if coverage_stats is not None:
             coverage_stats.update_from_frame(scored[[USER_COL, ITEM_COL]])
         submission.update(top_k_from_scored(scored, k=10))
         print(
-            f"  chunk {chunk_id:,}/{n_chunks:,}: users={user_chunk.height:,}, "
+            f"  chunk {chunk_label}: users={user_chunk.height:,}, "
             f"candidates={len(scored):,}, saved_users={len(submission):,}"
         )
         del scored

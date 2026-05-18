@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from collections.abc import Iterator
 from pathlib import Path
 
 import polars as pl
@@ -107,6 +108,57 @@ def users_before_cutoff(
     if max_users:
         users = users.sample(n=min(max_users, users.height), seed=42)
     return users
+
+
+def iter_users_before_cutoff_from_parquet(
+    path: Path,
+    cutoff: datetime,
+    chunk_size: int,
+    max_users: int | None = None,
+    batch_size: int = 250_000,
+) -> Iterator[tuple[int, pl.DataFrame]]:
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    seen: set[int] = set()
+    chunk: list[int] = []
+    chunk_id = 1
+    cutoff_scalar = pa.scalar(cutoff)
+    parquet = pq.ParquetFile(path)
+
+    for batch in parquet.iter_batches(
+        batch_size=batch_size,
+        columns=[USER_COL, ITEM_COL, DATE_COL],
+    ):
+        user_arr = batch.column(batch.schema.get_field_index(USER_COL))
+        item_arr = batch.column(batch.schema.get_field_index(ITEM_COL))
+        date_arr = batch.column(batch.schema.get_field_index(DATE_COL))
+        valid_mask = pc.and_(pc.is_valid(user_arr), pc.is_valid(item_arr))
+        before_cutoff_mask = pc.less(date_arr, cutoff_scalar)
+        mask = pc.and_(valid_mask, before_cutoff_mask)
+
+        for user_id in pc.filter(user_arr, mask).to_pylist():
+            if user_id is None:
+                continue
+            user_id = int(user_id)
+            if user_id in seen:
+                continue
+
+            seen.add(user_id)
+            chunk.append(user_id)
+            if len(chunk) >= chunk_size:
+                yield chunk_id, pl.DataFrame({USER_COL: chunk})
+                chunk_id += 1
+                chunk = []
+
+            if max_users is not None and len(seen) >= max_users:
+                if chunk:
+                    yield chunk_id, pl.DataFrame({USER_COL: chunk})
+                return
+
+    if chunk:
+        yield chunk_id, pl.DataFrame({USER_COL: chunk})
 
 
 def iter_user_chunks(users: pl.DataFrame, chunk_size: int):
