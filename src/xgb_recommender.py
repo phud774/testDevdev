@@ -51,6 +51,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--early-stopping-rounds", type=int, default=50)
     parser.add_argument("--n-jobs", type=int, default=0)
     parser.add_argument(
+        "--xgb-device",
+        choices=["cpu", "cuda"],
+        default="cpu",
+        help="XGBoost device. Use cuda to train and predict with GPU when XGBoost has CUDA support.",
+    )
+    parser.add_argument(
         "--use-ground-truth-users",
         action="store_true",
         help="Use users from --ground-truth during test prediction.",

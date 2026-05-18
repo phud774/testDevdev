@@ -5,6 +5,13 @@ import pandas as pd
 from .constants import FEATURE_COLS
 
 
+def xgboost_major_version(version: str) -> int:
+    try:
+        return int(version.split(".", 1)[0])
+    except (ValueError, IndexError):
+        return 0
+
+
 def train_xgboost(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame | None,
@@ -13,6 +20,7 @@ def train_xgboost(
     early_stopping: bool = True,
 ):
     try:
+        import xgboost as xgb
         from xgboost import XGBClassifier
     except ImportError as exc:
         raise SystemExit(
@@ -39,10 +47,23 @@ def train_xgboost(
         "random_state": 42,
         "scale_pos_weight": train_neg / train_pos,
     }
+    if args.xgb_device == "cuda":
+        if xgboost_major_version(xgb.__version__) >= 2:
+            model_kwargs["device"] = "cuda"
+        else:
+            model_kwargs["tree_method"] = "gpu_hist"
+            model_kwargs["predictor"] = "gpu_predictor"
+    elif xgboost_major_version(xgb.__version__) >= 2:
+        model_kwargs["device"] = "cpu"
+
     if early_stopping and use_eval and args.early_stopping_rounds > 0:
         model_kwargs["early_stopping_rounds"] = args.early_stopping_rounds
 
     model = XGBClassifier(**model_kwargs)
+    print(
+        f"Training XGBoost on {args.xgb_device} "
+        f"(tree_method={model_kwargs['tree_method']})"
+    )
     eval_set = [(val_df[FEATURE_COLS], val_df["label"])] if use_eval else None
     model.fit(train_df[FEATURE_COLS], train_df["label"], eval_set=eval_set, verbose=True)
 
