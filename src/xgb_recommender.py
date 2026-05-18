@@ -42,6 +42,9 @@ def parse_args() -> argparse.Namespace:
         default=20,
         help="Co-buy items kept per anchor item. Use 0 to disable this memory-heavy source.",
     )
+    parser.add_argument("--candidate-cache-dir", default="cache/candidates")
+    parser.add_argument("--no-candidate-cache", action="store_true")
+    parser.add_argument("--refresh-candidate-cache", action="store_true")
 
     parser.add_argument("--negative-ratio", type=float, default=6.0)
     parser.add_argument("--n-estimators", type=int, default=500)

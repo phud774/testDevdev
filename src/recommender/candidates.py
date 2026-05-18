@@ -1,4 +1,6 @@
+import hashlib
 from datetime import datetime
+from pathlib import Path
 
 import polars as pl
 
@@ -11,6 +13,60 @@ from .constants import (
     USER_COL,
 )
 from .data import history_before
+
+
+def _cache_path(
+    cache_dir: Path | None,
+    cutoff: datetime,
+    name: str,
+    **params: int | str,
+) -> Path | None:
+    if cache_dir is None:
+        return None
+    suffix = "_".join(f"{key}{value}" for key, value in sorted(params.items()))
+    filename = f"{name}_{suffix}.parquet" if suffix else f"{name}.parquet"
+    return cache_dir / cutoff.strftime("%Y-%m") / filename
+
+
+def _cached_lazy(
+    frame: pl.LazyFrame,
+    path: Path | None,
+    refresh_cache: bool,
+) -> pl.LazyFrame:
+    if path is not None and path.exists() and not refresh_cache:
+        return pl.scan_parquet(path)
+
+    collected = frame.collect(engine="streaming")
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        collected.write_parquet(path)
+    return collected.lazy()
+
+
+def _empty_items() -> pl.LazyFrame:
+    return pl.DataFrame({ITEM_COL: []}, schema={ITEM_COL: pl.Utf8}).lazy()
+
+
+def _empty_location_items() -> pl.LazyFrame:
+    return pl.DataFrame(
+        {LOC_COL: [], ITEM_COL: []},
+        schema={LOC_COL: pl.Int64, ITEM_COL: pl.Utf8},
+    ).lazy()
+
+
+def _empty_cobuy_items() -> pl.LazyFrame:
+    return pl.DataFrame(
+        {"anchor_item": [], "co_item": [], "cobuy_count": []},
+        schema={"anchor_item": pl.Utf8, "co_item": pl.Utf8, "cobuy_count": pl.UInt32},
+    ).lazy()
+
+
+def _hash_item_values(values: list[str]) -> str:
+    digest = hashlib.sha1()
+    for value in sorted(values):
+        digest.update(value.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()[:16]
 
 
 def _mark_source(frame: pl.LazyFrame, source_col: str) -> pl.LazyFrame:
@@ -33,6 +89,8 @@ def build_candidates(
     recent_global_top: int,
     recent_location_top: int,
     cobuy_top: int = 20,
+    cache_dir: Path | None = None,
+    refresh_cache: bool = False,
 ) -> pl.DataFrame:
     hist = history_before(lf, cutoff)
     user_lf = target_users.lazy()
@@ -69,22 +127,38 @@ def build_candidates(
     )
     repeat_all = _mark_source(repeat_all, "candidate_repeat_all")
 
-    global_items = (
-        hist.group_by(ITEM_COL)
-        .agg(pl.len().alias("global_count"))
-        .sort("global_count", descending=True)
-        .head(global_top)
-        .select(ITEM_COL)
-    )
+    if global_top > 0:
+        global_items = _cached_lazy(
+            hist.group_by(ITEM_COL)
+            .agg(pl.len().alias("global_count"))
+            .sort("global_count", descending=True)
+            .head(global_top)
+            .select(ITEM_COL),
+            _cache_path(cache_dir, cutoff, "global_items", top=global_top),
+            refresh_cache,
+        )
+    else:
+        global_items = _empty_items()
     global_candidates = _mark_source(user_lf.join(global_items, how="cross"), "candidate_global")
 
-    recent_global_items = (
-        recent_hist.group_by(ITEM_COL)
-        .agg(pl.len().alias("recent_global_count"))
-        .sort("recent_global_count", descending=True)
-        .head(recent_global_top)
-        .select(ITEM_COL)
-    )
+    if recent_global_top > 0:
+        recent_global_items = _cached_lazy(
+            recent_hist.group_by(ITEM_COL)
+            .agg(pl.len().alias("recent_global_count"))
+            .sort("recent_global_count", descending=True)
+            .head(recent_global_top)
+            .select(ITEM_COL),
+            _cache_path(
+                cache_dir,
+                cutoff,
+                "recent_global_items",
+                days=recent_days,
+                top=recent_global_top,
+            ),
+            refresh_cache,
+        )
+    else:
+        recent_global_items = _empty_items()
     recent_global_candidates = _mark_source(
         user_lf.join(recent_global_items, how="cross"),
         "candidate_recent_global",
@@ -96,35 +170,51 @@ def build_candidates(
         .group_by(USER_COL)
         .agg(pl.last(LOC_COL).alias(LOC_COL))
     )
-    location_items = (
-        hist.group_by([LOC_COL, ITEM_COL])
-        .agg(pl.len().alias("location_count"))
-        .with_columns(
-            pl.col("location_count")
-            .rank(method="ordinal", descending=True)
-            .over(LOC_COL)
-            .alias("location_rank")
+    if location_top > 0:
+        location_items = _cached_lazy(
+            hist.group_by([LOC_COL, ITEM_COL])
+            .agg(pl.len().alias("location_count"))
+            .with_columns(
+                pl.col("location_count")
+                .rank(method="ordinal", descending=True)
+                .over(LOC_COL)
+                .alias("location_rank")
+            )
+            .filter(pl.col("location_rank") <= location_top)
+            .select(LOC_COL, ITEM_COL),
+            _cache_path(cache_dir, cutoff, "location_items", top=location_top),
+            refresh_cache,
         )
-        .filter(pl.col("location_rank") <= location_top)
-        .select(LOC_COL, ITEM_COL)
-    )
+    else:
+        location_items = _empty_location_items()
     location_candidates = _mark_source(
         user_location.join(location_items, on=LOC_COL, how="inner"),
         "candidate_location",
     )
 
-    recent_location_items = (
-        recent_hist.group_by([LOC_COL, ITEM_COL])
-        .agg(pl.len().alias("recent_location_count"))
-        .with_columns(
-            pl.col("recent_location_count")
-            .rank(method="ordinal", descending=True)
-            .over(LOC_COL)
-            .alias("recent_location_rank")
+    if recent_location_top > 0:
+        recent_location_items = _cached_lazy(
+            recent_hist.group_by([LOC_COL, ITEM_COL])
+            .agg(pl.len().alias("recent_location_count"))
+            .with_columns(
+                pl.col("recent_location_count")
+                .rank(method="ordinal", descending=True)
+                .over(LOC_COL)
+                .alias("recent_location_rank")
+            )
+            .filter(pl.col("recent_location_rank") <= recent_location_top)
+            .select(LOC_COL, ITEM_COL),
+            _cache_path(
+                cache_dir,
+                cutoff,
+                "recent_location_items",
+                days=recent_days,
+                top=recent_location_top,
+            ),
+            refresh_cache,
         )
-        .filter(pl.col("recent_location_rank") <= recent_location_top)
-        .select(LOC_COL, ITEM_COL)
-    )
+    else:
+        recent_location_items = _empty_location_items()
     recent_location_candidates = _mark_source(
         user_location.join(recent_location_items, on=LOC_COL, how="inner"),
         "candidate_recent_location",
@@ -142,29 +232,47 @@ def build_candidates(
             .select(USER_COL, "anchor_item")
         )
         basket_items = personal_hist.select(BILL_COL, ITEM_COL).unique()
-        anchor_items = recent_user_items.select(pl.col("anchor_item").alias(ITEM_COL)).unique()
-        anchor_bills = basket_items.join(anchor_items, on=ITEM_COL, how="inner").rename(
-            {ITEM_COL: "anchor_item"}
+        anchor_items_df = (
+            recent_user_items.select(pl.col("anchor_item").alias(ITEM_COL))
+            .unique()
+            .collect(engine="streaming")
         )
-        relevant_bills = anchor_bills.select(BILL_COL).unique()
-        basket_co_items = (
-            basket_items.join(relevant_bills, on=BILL_COL, how="inner")
-            .rename({ITEM_COL: "co_item"})
-        )
-        co_items = (
-            anchor_bills.join(basket_co_items, on=BILL_COL, how="inner")
-            .filter(pl.col("anchor_item") != pl.col("co_item"))
-            .group_by(["anchor_item", "co_item"])
-            .agg(pl.len().alias("cobuy_count"))
-            .with_columns(
-                pl.col("cobuy_count")
-                .rank(method="ordinal", descending=True)
-                .over("anchor_item")
-                .alias("cobuy_rank")
+        anchor_values = anchor_items_df.get_column(ITEM_COL).to_list()
+        if anchor_values:
+            anchor_items = anchor_items_df.lazy()
+            anchor_bills = basket_items.join(anchor_items, on=ITEM_COL, how="inner").rename(
+                {ITEM_COL: "anchor_item"}
             )
-            .filter(pl.col("cobuy_rank") <= cobuy_top)
-            .select("anchor_item", "co_item", "cobuy_count")
-        )
+            relevant_bills = anchor_bills.select(BILL_COL).unique()
+            basket_co_items = (
+                basket_items.join(relevant_bills, on=BILL_COL, how="inner")
+                .rename({ITEM_COL: "co_item"})
+            )
+            co_items = _cached_lazy(
+                anchor_bills.join(basket_co_items, on=BILL_COL, how="inner")
+                .filter(pl.col("anchor_item") != pl.col("co_item"))
+                .group_by(["anchor_item", "co_item"])
+                .agg(pl.len().alias("cobuy_count"))
+                .with_columns(
+                    pl.col("cobuy_count")
+                    .rank(method="ordinal", descending=True)
+                    .over("anchor_item")
+                    .alias("cobuy_rank")
+                )
+                .filter(pl.col("cobuy_rank") <= cobuy_top)
+                .select("anchor_item", "co_item", "cobuy_count"),
+                _cache_path(
+                    cache_dir,
+                    cutoff,
+                    "cobuy_items",
+                    anchors=_hash_item_values(anchor_values),
+                    days=personal_days,
+                    top=cobuy_top,
+                ),
+                refresh_cache,
+            )
+        else:
+            co_items = _empty_cobuy_items()
         cobuy_candidates = (
             recent_user_items.join(co_items, on="anchor_item", how="inner")
             .group_by([USER_COL, "co_item"])

@@ -1,6 +1,7 @@
 venv/
 data/
 parquet_reports/
+cache/
 
 __pycache__/
 *.py[cod]

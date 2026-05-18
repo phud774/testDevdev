@@ -70,6 +70,8 @@ def build_scored_chunk(
         recent_global_top=args.popular_top,
         recent_location_top=args.location_top,
         cobuy_top=args.cobuy_top,
+        cache_dir=None if args.no_candidate_cache else Path(args.candidate_cache_dir),
+        refresh_cache=args.refresh_candidate_cache,
     )
     features = add_features(lf, candidates, cutoff=target.start, item_lf=item_lf)
     pdf = features.to_pandas()
@@ -218,6 +220,8 @@ def evaluate_month_chunked(
             recent_global_top=args.popular_top,
             recent_location_top=args.location_top,
             cobuy_top=args.cobuy_top,
+            cache_dir=None if args.no_candidate_cache else Path(args.candidate_cache_dir),
+            refresh_cache=args.refresh_candidate_cache,
         )
         coverage_stats.ground_truth.update(validation_truth_for_users(lf, user_chunk, target_month))
         coverage_stats.update_from_frame(candidates[[USER_COL, ITEM_COL]].to_pandas())

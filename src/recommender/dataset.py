@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -59,6 +60,8 @@ def build_dataset_for_users(
         recent_global_top=args.popular_top,
         recent_location_top=args.location_top,
         cobuy_top=args.cobuy_top,
+        cache_dir=None if args.no_candidate_cache else Path(args.candidate_cache_dir),
+        refresh_cache=args.refresh_candidate_cache,
     )
     features = add_features(lf, candidates, cutoff=target.start, item_lf=item_lf)
     labeled = add_labels(lf, features, target)
