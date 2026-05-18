@@ -49,6 +49,21 @@ def write_submission_entries(
     return first_entry
 
 
+def predict_scores(model, feature_frame: pd.DataFrame, args: argparse.Namespace) -> np.ndarray:
+    values = feature_frame.to_numpy(dtype=np.float32, copy=False)
+    if args.xgb_device == "cuda":
+        try:
+            import cupy as cp
+        except ImportError:
+            return model.predict_proba(values)[:, 1]
+
+        gpu_values = cp.asarray(values)
+        scores = model.predict_proba(gpu_values)[:, 1]
+        return cp.asnumpy(scores)
+
+    return model.predict_proba(values)[:, 1]
+
+
 def build_scored_chunk(
     model,
     lf: pl.LazyFrame,
@@ -76,7 +91,7 @@ def build_scored_chunk(
     features = add_features(lf, candidates, cutoff=target.start, item_lf=item_lf)
     pdf = features.to_pandas()
     pdf[FEATURE_COLS] = pdf[FEATURE_COLS].astype(np.float32)
-    pdf["score"] = model.predict_proba(pdf[FEATURE_COLS])[:, 1]
+    pdf["score"] = predict_scores(model, pdf[FEATURE_COLS], args)
     return pdf
 
 
@@ -230,7 +245,7 @@ def evaluate_month_chunked(
         labeled = add_labels(lf, features, target)
         chunk = labeled.to_pandas()
         chunk[FEATURE_COLS] = chunk[FEATURE_COLS].astype(np.float32)
-        chunk["score"] = model.predict_proba(chunk[FEATURE_COLS])[:, 1]
+        chunk["score"] = predict_scores(model, chunk[FEATURE_COLS], args)
         precisions.append(precision_at_10_from_scores(chunk))
         losses.append(log_loss(chunk["label"], np.clip(chunk["score"], 1e-6, 1 - 1e-6)))
         submission.update(top_k_from_scored(chunk, k=10))
