@@ -153,12 +153,17 @@ def evaluate_submission_dict(
 
 def evaluate_model(model, val_df: pd.DataFrame) -> pd.DataFrame:
     val_df = val_df.copy()
-    val_df["score"] = model.predict_proba(val_df[FEATURE_COLS])[:, 1]
+    if hasattr(model, "predict_proba"):
+        val_df["score"] = model.predict_proba(val_df[FEATURE_COLS])[:, 1]
+        loss = log_loss(val_df["label"], np.clip(val_df["score"], 1e-6, 1 - 1e-6))
+    else:
+        val_df["score"] = model.predict(val_df[FEATURE_COLS])
+        loss = None
     ap = average_precision_score(val_df["label"], val_df["score"])
-    loss = log_loss(val_df["label"], np.clip(val_df["score"], 1e-6, 1 - 1e-6))
     p10 = precision_at_10_from_scores(val_df)
     print("\nValidation metrics")
     print(f"Average precision: {ap:.6f}")
-    print(f"Log loss:          {loss:.6f}")
+    if loss is not None:
+        print(f"Log loss:          {loss:.6f}")
     print(f"Precision@10:     {p10:.6f}")
     return val_df

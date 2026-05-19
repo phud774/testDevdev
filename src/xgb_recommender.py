@@ -51,6 +51,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--early-stopping-rounds", type=int, default=50)
     parser.add_argument("--n-jobs", type=int, default=0)
     parser.add_argument(
+        "--xgb-objective",
+        choices=["rank_ndcg", "rank_pairwise", "binary"],
+        default="rank_ndcg",
+        help=(
+            "XGBoost learning objective. Ranking modes use customer_id groups "
+            "and optimize top-k ordering directly."
+        ),
+    )
+    parser.add_argument(
         "--xgb-device",
         choices=["cpu", "cuda"],
         default="cpu",

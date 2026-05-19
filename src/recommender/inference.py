@@ -51,16 +51,24 @@ def write_submission_entries(
 
 def predict_scores(model, feature_frame: pd.DataFrame, args: argparse.Namespace) -> np.ndarray:
     values = feature_frame.to_numpy(dtype=np.float32, copy=False)
+    use_ranker = getattr(args, "xgb_objective", "binary") != "binary"
     if args.xgb_device == "cuda":
         try:
             import cupy as cp
         except ImportError:
+            if use_ranker:
+                return model.predict(values)
             return model.predict_proba(values)[:, 1]
 
         gpu_values = cp.asarray(values)
-        scores = model.predict_proba(gpu_values)[:, 1]
+        if use_ranker:
+            scores = model.predict(gpu_values)
+        else:
+            scores = model.predict_proba(gpu_values)[:, 1]
         return cp.asnumpy(scores)
 
+    if use_ranker:
+        return model.predict(values)
     return model.predict_proba(values)[:, 1]
 
 
@@ -247,7 +255,8 @@ def evaluate_month_chunked(
         chunk[FEATURE_COLS] = chunk[FEATURE_COLS].astype(np.float32)
         chunk["score"] = predict_scores(model, chunk[FEATURE_COLS], args)
         precisions.append(precision_at_10_from_scores(chunk))
-        losses.append(log_loss(chunk["label"], np.clip(chunk["score"], 1e-6, 1 - 1e-6)))
+        if getattr(args, "xgb_objective", "binary") == "binary":
+            losses.append(log_loss(chunk["label"], np.clip(chunk["score"], 1e-6, 1 - 1e-6)))
         submission.update(top_k_from_scored(chunk, k=10))
         print(
             f"  chunk {chunk_id:,}/{n_chunks:,}: users={user_chunk.height:,}, "
@@ -259,5 +268,6 @@ def evaluate_month_chunked(
         json.dump(submission, f, ensure_ascii=False)
     coverage_stats.print_summary()
     print("\nValidation metrics")
-    print(f"Mean chunk log loss:      {float(np.mean(losses)):.6f}")
+    if losses:
+        print(f"Mean chunk log loss:      {float(np.mean(losses)):.6f}")
     print(f"Mean chunk Precision@10:  {float(np.mean(precisions)):.6f}")
