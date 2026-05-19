@@ -24,7 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--train-months",
         default=None,
-        help="Comma-separated label months. Default: two months before validation.",
+        help=(
+            "Comma-separated label months. Default: two months before validation. "
+            "Ignored by --predict-jan-2026, which always trains 2025-01..2025-11 "
+            "before refitting with 2025-12."
+        ),
     )
     parser.add_argument("--max-train-users", type=int, default=None)
     parser.add_argument("--max-val-users", type=int, default=None)
@@ -112,10 +116,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_train_months(args: argparse.Namespace) -> list[str]:
-    if args.train_months:
-        return [month.strip() for month in args.train_months.split(",") if month.strip()]
     if args.predict_jan_2026:
         return previous_months(args.val_month, 11)
+    if args.train_months:
+        return [month.strip() for month in args.train_months.split(",") if month.strip()]
     return [month_minus(args.val_month, 2), month_minus(args.val_month, 1)]
 
 
@@ -126,6 +130,12 @@ def configure_special_modes(args: argparse.Namespace) -> None:
     args.val_month = "2025-12"
     args.predict_all_history_users = True
     args.no_refit_on_validation = False
+    if args.train_months:
+        print(
+            "\nIgnoring --train-months because --predict-jan-2026 uses "
+            "2025-01..2025-11, then refits with 2025-12."
+        )
+        args.train_months = None
     if args.submission == "submission_xgb.json":
         args.submission = "submission_2026-01.json"
 
@@ -201,12 +211,14 @@ def main() -> None:
         final_model = model
     else:
         n_estimators = best_tree_count(model, args.n_estimators)
+        final_train_df = pd.concat([train_df, val_df], ignore_index=True)
         print(
-            f"\nRefitting on validation rows only: {len(val_df):,} "
+            f"\nRefitting on train + validation rows: {len(final_train_df):,} "
+            f"({len(train_df):,} train + {len(val_df):,} validation) "
             f"with n_estimators={n_estimators}"
         )
         final_model = train_xgboost(
-            val_df,
+            final_train_df,
             None,
             args,
             n_estimators=n_estimators,
