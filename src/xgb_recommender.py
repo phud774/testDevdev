@@ -192,13 +192,12 @@ def main() -> None:
         final_model = model
     else:
         n_estimators = best_tree_count(model, args.n_estimators)
-        final_train = pd.concat([train_df, val_df], ignore_index=True)
         print(
-            f"\nRefitting on train + validation rows: {len(final_train):,} "
+            f"\nRefitting on validation rows only: {len(val_df):,} "
             f"with n_estimators={n_estimators}"
         )
         final_model = train_xgboost(
-            final_train,
+            val_df,
             None,
             args,
             n_estimators=n_estimators,
