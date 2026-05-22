@@ -2,7 +2,7 @@ import json
 import pickle
 from pathlib import Path
 
-json_path = Path(r"C:\coding_space\study\CS116\project\submission_2026-01.json")
+json_path = Path(r"C:\coding_space\study\CS116\project\submission_2026-01-next-next.json")
 pkl_path = json_path.with_suffix(".pkl")
 
 
@@ -28,9 +28,10 @@ print(f"Saved to: {pkl_path}")
 
 with pkl_path.open("rb") as f:
     loaded_data = pickle.load(f)
-
 print("\nPKL head:")
 for idx, (user_id, items) in enumerate(loaded_data.items()):
     if idx >= 5:
         break
+    print(type(items))
+
     print(f"{user_id!r} ({type(user_id).__name__}): {items[:10]}")

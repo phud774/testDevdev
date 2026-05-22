@@ -257,7 +257,7 @@ def evaluate_month_chunked(
         precisions.append(precision_at_10_from_scores(chunk))
         if getattr(args, "xgb_objective", "binary") == "binary":
             losses.append(log_loss(chunk["label"], np.clip(chunk["score"], 1e-6, 1 - 1e-6)))
-        submission.update(top_k_from_scored(chunk, k=10))
+        submission.update(top_k_from_scored(chunk, k=30))
         print(
             f"  chunk {chunk_id:,}/{n_chunks:,}: users={user_chunk.height:,}, "
             f"rows={len(chunk):,}, precision@10={precisions[-1]:.6f}"
