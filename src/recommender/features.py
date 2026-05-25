@@ -61,6 +61,13 @@ def add_features(
                 "ui_discount_rate"
             ),
             (pl.col("ui_first_days") - pl.col("ui_last_days")).alias("ui_active_span_days"),
+            (pl.col("ui_net_spend_sum") / (pl.col("ui_tx_count") + 1.0)).alias(
+                "ui_net_spend_per_tx"
+            ),
+            (
+                (pl.col("ui_first_days") - pl.col("ui_last_days"))
+                / pl.max_horizontal(pl.col("ui_tx_count") - 1, pl.lit(1))
+            ).alias("ui_repeat_interval_days"),
         )
     )
 
@@ -103,6 +110,7 @@ def add_features(
             pl.n_unique(ITEM_COL).alias("u_item_nunique"),
             pl.sum(QTY_COL).alias("u_qty_sum"),
             spend.sum().alias("u_spend_sum"),
+            net_spend.sum().alias("u_net_spend_sum"),
             pl.mean(PRICE_COL).alias("u_avg_price"),
             ((pl.lit(cutoff) - pl.max(DATE_COL)).dt.total_days()).alias("u_last_days"),
         )
@@ -126,6 +134,7 @@ def add_features(
         .agg(
             pl.len().alias("i_tx_count"),
             pl.sum(QTY_COL).alias("i_qty_sum"),
+            pl.mean(QTY_COL).alias("i_avg_qty"),
         )
     )
     item_recent_30 = (
@@ -335,6 +344,13 @@ def add_features(
             (pl.col("ui_tx_count") / (pl.col("i_tx_count") + 1.0)).alias("ui_share_of_item_tx"),
             (pl.col("ui_qty_sum") / (pl.col("u_qty_sum") + 1.0)).alias("ui_share_of_user_qty"),
             (pl.col("ui_qty_sum") / (pl.col("i_qty_sum") + 1.0)).alias("ui_share_of_item_qty"),
+            (pl.col("u_tx_count") / (pl.col("u_bill_nunique") + 1.0)).alias("u_tx_per_bill"),
+            (pl.col("u_tx_30d") / (pl.col("u_tx_count") + 1.0)).alias("u_recent_30_share"),
+            (pl.col("u_tx_90d") / (pl.col("u_tx_count") + 1.0)).alias("u_recent_90_share"),
+            (pl.col("i_tx_30d") / (pl.col("i_tx_count") + 1.0)).alias("i_recent_30_share"),
+            (pl.col("loc_i_tx_count") / (pl.col("i_tx_count") + 1.0)).alias(
+                "loc_i_share_of_item_tx"
+            ),
             (pl.col("ui_avg_price") / (pl.col("u_avg_price") + 1.0)).alias(
                 "user_item_price_ratio"
             ),

@@ -31,6 +31,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--popular-top", type=int, default=120)
     parser.add_argument("--location-top", type=int, default=50)
     parser.add_argument(
+        "--cobuy-top",
+        type=int,
+        default=20,
+        help="Co-buy items kept per anchor item. Use 0 to disable this memory-heavy source.",
+    )
+    parser.add_argument("--candidate-cache-dir", default="cache/candidates")
+    parser.add_argument("--no-candidate-cache", action="store_true")
+    parser.add_argument("--refresh-candidate-cache", action="store_true")
+    parser.add_argument(
         "--negative-ratio",
         type=float,
         default=6.0,

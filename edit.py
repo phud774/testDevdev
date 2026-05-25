@@ -2,7 +2,7 @@ import json
 import pickle
 from pathlib import Path
 
-json_path = Path(r"C:\coding_space\study\CS116\project\submission_2026-01-next-next.json")
+json_path = Path(r"C:\coding_space\study\CS116\project\submission_2026-01 (2).json")
 pkl_path = json_path.with_suffix(".pkl")
 
 
