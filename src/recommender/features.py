@@ -5,6 +5,7 @@ import polars as pl
 from .constants import (
     BILL_COL,
     BRAND_COL,
+    CAT_L1_COL,
     CAT_COL,
     CAT_L2_COL,
     CAT_L3_COL,
@@ -77,6 +78,12 @@ def add_features(
         .group_by([USER_COL, ITEM_COL])
         .agg(pl.len().alias("ui_tx_30d"))
     )
+    pair_recent_7 = (
+        recent(7)
+        .join(candidate_pairs, on=[USER_COL, ITEM_COL], how="inner")
+        .group_by([USER_COL, ITEM_COL])
+        .agg(pl.len().alias("ui_tx_7d"))
+    )
     pair_recent_90 = (
         recent(90)
         .join(candidate_pairs, on=[USER_COL, ITEM_COL], how="inner")
@@ -110,9 +117,16 @@ def add_features(
             pl.n_unique(ITEM_COL).alias("u_item_nunique"),
             pl.sum(QTY_COL).alias("u_qty_sum"),
             spend.sum().alias("u_spend_sum"),
+            discount.sum().alias("u_discount_sum"),
             net_spend.sum().alias("u_net_spend_sum"),
             pl.mean(PRICE_COL).alias("u_avg_price"),
+            pl.mean(DISCOUNT_COL).alias("u_avg_discount"),
             ((pl.lit(cutoff) - pl.max(DATE_COL)).dt.total_days()).alias("u_last_days"),
+        )
+        .with_columns(
+            (pl.col("u_discount_sum") / (pl.col("u_spend_sum") + 1.0)).alias(
+                "u_discount_rate"
+            )
         )
     )
     user_recent_30 = (
@@ -133,6 +147,7 @@ def add_features(
         .group_by(ITEM_COL)
         .agg(
             pl.len().alias("i_tx_count"),
+            pl.n_unique(USER_COL).alias("i_user_nunique"),
             pl.sum(QTY_COL).alias("i_qty_sum"),
             pl.mean(QTY_COL).alias("i_avg_qty"),
         )
@@ -147,7 +162,7 @@ def add_features(
         recent(90)
         .join(candidate_items, on=ITEM_COL, how="inner")
         .group_by(ITEM_COL)
-        .agg(pl.len().alias("i_tx_90d"))
+        .agg(pl.len().alias("i_tx_90d"), pl.n_unique(USER_COL).alias("i_user_90d"))
     )
 
     candidate_location_items = (
@@ -159,13 +174,28 @@ def add_features(
     location_item_features = (
         hist.join(candidate_location_items, on=[LOC_COL, ITEM_COL], how="inner")
         .group_by([LOC_COL, ITEM_COL])
-        .agg(pl.len().alias("loc_i_tx_count"), pl.sum(QTY_COL).alias("loc_i_qty_sum"))
+        .agg(
+            pl.len().alias("loc_i_tx_count"),
+            pl.len().alias("loc_item_tx_count"),
+            pl.n_unique(USER_COL).alias("loc_item_user_nunique"),
+            pl.sum(QTY_COL).alias("loc_i_qty_sum"),
+        )
+    )
+    location_item_recent_30 = (
+        recent(30)
+        .join(candidate_location_items, on=[LOC_COL, ITEM_COL], how="inner")
+        .group_by([LOC_COL, ITEM_COL])
+        .agg(pl.len().alias("loc_item_tx_30d"))
     )
     location_item_recent_90 = (
         recent(90)
         .join(candidate_location_items, on=[LOC_COL, ITEM_COL], how="inner")
         .group_by([LOC_COL, ITEM_COL])
-        .agg(pl.len().alias("loc_i_tx_90d"), pl.sum(QTY_COL).alias("loc_i_qty_90d"))
+        .agg(
+            pl.len().alias("loc_i_tx_90d"),
+            pl.len().alias("loc_item_tx_90d"),
+            pl.sum(QTY_COL).alias("loc_i_qty_90d"),
+        )
     )
 
     if item_lf is not None:
@@ -174,6 +204,7 @@ def add_features(
             ITEM_CATALOG_PRICE_COL,
             "item_sale_status",
             ITEM_DESC_LEN_COL,
+            CAT_L1_COL,
             CAT_L2_COL,
             CAT_L3_COL,
             CAT_COL,
@@ -183,7 +214,9 @@ def add_features(
             item_meta, on=ITEM_COL, how="left"
         )
         hist_meta = hist.join(
-            item_meta.select([ITEM_COL, CAT_L2_COL, CAT_L3_COL, CAT_COL, BRAND_COL]),
+            item_meta.select(
+                [ITEM_COL, CAT_L1_COL, CAT_L2_COL, CAT_L3_COL, CAT_COL, BRAND_COL]
+            ),
             on=ITEM_COL,
             how="left",
         )
@@ -201,6 +234,26 @@ def add_features(
             )
             .group_by([USER_COL, CAT_L2_COL])
             .agg(pl.len().alias("u_cat_l2_tx_count"))
+        )
+        user_cat_l1 = (
+            hist_meta.join(
+                candidate_meta.select([USER_COL, CAT_L1_COL]).drop_nulls().unique(),
+                on=[USER_COL, CAT_L1_COL],
+                how="inner",
+            )
+            .group_by([USER_COL, CAT_L1_COL])
+            .agg(pl.len().alias("u_cat_l1_tx_count"))
+        )
+        user_cat_l1_90 = (
+            recent(90)
+            .join(item_meta.select([ITEM_COL, CAT_L1_COL]), on=ITEM_COL, how="left")
+            .join(
+                candidate_meta.select([USER_COL, CAT_L1_COL]).drop_nulls().unique(),
+                on=[USER_COL, CAT_L1_COL],
+                how="inner",
+            )
+            .group_by([USER_COL, CAT_L1_COL])
+            .agg(pl.len().alias("u_cat_l1_tx_90d"))
         )
         user_cat_l3 = (
             hist_meta.join(
@@ -276,6 +329,7 @@ def add_features(
             pl.lit(0.0).alias(ITEM_CATALOG_PRICE_COL),
             pl.lit(0).alias("item_sale_status"),
             pl.lit(0).alias(ITEM_DESC_LEN_COL),
+            pl.lit("").alias(CAT_L1_COL),
             pl.lit("").alias(CAT_L2_COL),
             pl.lit("").alias(CAT_L3_COL),
             pl.lit("").alias(CAT_COL),
@@ -283,6 +337,12 @@ def add_features(
         )
         user_cat_l2 = candidate_meta.select([USER_COL, CAT_L2_COL]).with_columns(
             pl.lit(0).alias("u_cat_l2_tx_count")
+        )
+        user_cat_l1 = candidate_meta.select([USER_COL, CAT_L1_COL]).with_columns(
+            pl.lit(0).alias("u_cat_l1_tx_count")
+        )
+        user_cat_l1_90 = candidate_meta.select([USER_COL, CAT_L1_COL]).with_columns(
+            pl.lit(0).alias("u_cat_l1_tx_90d")
         )
         user_cat_l3 = candidate_meta.select([USER_COL, CAT_L3_COL]).with_columns(
             pl.lit(0).alias("u_cat_l3_tx_count")
@@ -317,6 +377,7 @@ def add_features(
 
     out = (
         cand_lf.join(pair_features, on=[USER_COL, ITEM_COL], how="left")
+        .join(pair_recent_7, on=[USER_COL, ITEM_COL], how="left")
         .join(pair_recent_30, on=[USER_COL, ITEM_COL], how="left")
         .join(pair_recent_90, on=[USER_COL, ITEM_COL], how="left")
         .join(user_features, on=USER_COL, how="left")
@@ -328,8 +389,11 @@ def add_features(
         .join(item_recent_30, on=ITEM_COL, how="left")
         .join(item_recent_90, on=ITEM_COL, how="left")
         .join(location_item_features, on=[LOC_COL, ITEM_COL], how="left")
+        .join(location_item_recent_30, on=[LOC_COL, ITEM_COL], how="left")
         .join(location_item_recent_90, on=[LOC_COL, ITEM_COL], how="left")
         .join(candidate_meta, on=[USER_COL, ITEM_COL], how="left")
+        .join(user_cat_l1, on=[USER_COL, CAT_L1_COL], how="left")
+        .join(user_cat_l1_90, on=[USER_COL, CAT_L1_COL], how="left")
         .join(user_cat_l2, on=[USER_COL, CAT_L2_COL], how="left")
         .join(user_cat_l3, on=[USER_COL, CAT_L3_COL], how="left")
         .join(user_category, on=[USER_COL, CAT_COL], how="left")
@@ -348,8 +412,17 @@ def add_features(
             (pl.col("u_tx_30d") / (pl.col("u_tx_count") + 1.0)).alias("u_recent_30_share"),
             (pl.col("u_tx_90d") / (pl.col("u_tx_count") + 1.0)).alias("u_recent_90_share"),
             (pl.col("i_tx_30d") / (pl.col("i_tx_count") + 1.0)).alias("i_recent_30_share"),
+            (pl.col("u_cat_l1_tx_count") / (pl.col("u_tx_count") + 1.0)).alias(
+                "u_cat_l1_share"
+            ),
             (pl.col("loc_i_tx_count") / (pl.col("i_tx_count") + 1.0)).alias(
                 "loc_i_share_of_item_tx"
+            ),
+            (pl.col("loc_item_tx_count") / (pl.col("i_tx_count") + 1.0)).alias(
+                "loc_item_share_of_item_tx"
+            ),
+            (pl.col("loc_item_tx_90d") / (pl.col("loc_item_tx_count") + 1.0)).alias(
+                "loc_item_recent_share"
             ),
             (pl.col("ui_avg_price") / (pl.col("u_avg_price") + 1.0)).alias(
                 "user_item_price_ratio"
