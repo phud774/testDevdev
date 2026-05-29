@@ -30,6 +30,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-top", type=int, default=80)
     parser.add_argument("--popular-top", type=int, default=120)
     parser.add_argument("--location-top", type=int, default=50)
+    parser.add_argument("--category-top", type=int, default=20)
+    parser.add_argument("--brand-top", type=int, default=20)
     parser.add_argument(
         "--cobuy-top",
         type=int,

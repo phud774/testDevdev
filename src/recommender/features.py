@@ -221,7 +221,7 @@ def add_features(
             how="left",
         )
         recent_90_meta = recent(90).join(
-            item_meta.select([ITEM_COL, BRAND_COL]),
+            item_meta.select([ITEM_COL, CAT_L1_COL, CAT_L2_COL, CAT_L3_COL, CAT_COL, BRAND_COL]),
             on=ITEM_COL,
             how="left",
         )
@@ -234,6 +234,15 @@ def add_features(
             )
             .group_by([USER_COL, CAT_L2_COL])
             .agg(pl.len().alias("u_cat_l2_tx_count"))
+        )
+        user_cat_l2_90 = (
+            recent_90_meta.join(
+                candidate_meta.select([USER_COL, CAT_L2_COL]).drop_nulls().unique(),
+                on=[USER_COL, CAT_L2_COL],
+                how="inner",
+            )
+            .group_by([USER_COL, CAT_L2_COL])
+            .agg(pl.len().alias("u_cat_l2_tx_90d"))
         )
         user_cat_l1 = (
             hist_meta.join(
@@ -264,6 +273,15 @@ def add_features(
             .group_by([USER_COL, CAT_L3_COL])
             .agg(pl.len().alias("u_cat_l3_tx_count"))
         )
+        user_cat_l3_90 = (
+            recent_90_meta.join(
+                candidate_meta.select([USER_COL, CAT_L3_COL]).drop_nulls().unique(),
+                on=[USER_COL, CAT_L3_COL],
+                how="inner",
+            )
+            .group_by([USER_COL, CAT_L3_COL])
+            .agg(pl.len().alias("u_cat_l3_tx_90d"))
+        )
         user_category = (
             hist_meta.join(
                 candidate_meta.select([USER_COL, CAT_COL]).drop_nulls().unique(),
@@ -272,6 +290,15 @@ def add_features(
             )
             .group_by([USER_COL, CAT_COL])
             .agg(pl.len().alias("u_category_tx_count"))
+        )
+        user_category_90 = (
+            recent_90_meta.join(
+                candidate_meta.select([USER_COL, CAT_COL]).drop_nulls().unique(),
+                on=[USER_COL, CAT_COL],
+                how="inner",
+            )
+            .group_by([USER_COL, CAT_COL])
+            .agg(pl.len().alias("u_category_tx_90d"))
         )
         user_brand = (
             hist_meta.join(
@@ -304,6 +331,11 @@ def add_features(
             .join(candidate_meta.select(CAT_COL).drop_nulls().unique(), on=CAT_COL, how="inner")
             .group_by(CAT_COL)
             .agg(pl.len().alias("category_tx_90d"))
+        )
+        category_features = (
+            hist_meta.join(candidate_meta.select(CAT_COL).drop_nulls().unique(), on=CAT_COL, how="inner")
+            .group_by(CAT_COL)
+            .agg(pl.len().alias("category_tx_count"))
         )
         candidate_location_categories = (
             candidate_meta.join(user_location, on=USER_COL, how="left")
@@ -338,6 +370,9 @@ def add_features(
         user_cat_l2 = candidate_meta.select([USER_COL, CAT_L2_COL]).with_columns(
             pl.lit(0).alias("u_cat_l2_tx_count")
         )
+        user_cat_l2_90 = candidate_meta.select([USER_COL, CAT_L2_COL]).with_columns(
+            pl.lit(0).alias("u_cat_l2_tx_90d")
+        )
         user_cat_l1 = candidate_meta.select([USER_COL, CAT_L1_COL]).with_columns(
             pl.lit(0).alias("u_cat_l1_tx_count")
         )
@@ -347,8 +382,14 @@ def add_features(
         user_cat_l3 = candidate_meta.select([USER_COL, CAT_L3_COL]).with_columns(
             pl.lit(0).alias("u_cat_l3_tx_count")
         )
+        user_cat_l3_90 = candidate_meta.select([USER_COL, CAT_L3_COL]).with_columns(
+            pl.lit(0).alias("u_cat_l3_tx_90d")
+        )
         user_category = candidate_meta.select([USER_COL, CAT_COL]).with_columns(
             pl.lit(0).alias("u_category_tx_count")
+        )
+        user_category_90 = candidate_meta.select([USER_COL, CAT_COL]).with_columns(
+            pl.lit(0).alias("u_category_tx_90d")
         )
         user_brand = candidate_meta.select([USER_COL, BRAND_COL]).with_columns(
             pl.lit(0).alias("u_brand_tx_count")
@@ -361,6 +402,9 @@ def add_features(
         )
         category_recent_90 = candidate_meta.select(CAT_COL).unique().with_columns(
             pl.lit(0).alias("category_tx_90d")
+        )
+        category_features = candidate_meta.select(CAT_COL).unique().with_columns(
+            pl.lit(0).alias("category_tx_count")
         )
         location_category_features = (
             candidate_meta.join(user_location, on=USER_COL, how="left")
@@ -395,10 +439,14 @@ def add_features(
         .join(user_cat_l1, on=[USER_COL, CAT_L1_COL], how="left")
         .join(user_cat_l1_90, on=[USER_COL, CAT_L1_COL], how="left")
         .join(user_cat_l2, on=[USER_COL, CAT_L2_COL], how="left")
+        .join(user_cat_l2_90, on=[USER_COL, CAT_L2_COL], how="left")
         .join(user_cat_l3, on=[USER_COL, CAT_L3_COL], how="left")
+        .join(user_cat_l3_90, on=[USER_COL, CAT_L3_COL], how="left")
         .join(user_category, on=[USER_COL, CAT_COL], how="left")
+        .join(user_category_90, on=[USER_COL, CAT_COL], how="left")
         .join(user_brand, on=[USER_COL, BRAND_COL], how="left")
         .join(user_brand_90, on=[USER_COL, BRAND_COL], how="left")
+        .join(category_features, on=CAT_COL, how="left")
         .join(category_recent_30, on=CAT_COL, how="left")
         .join(category_recent_90, on=CAT_COL, how="left")
         .join(location_category_features, on=[LOC_COL, CAT_COL], how="left")
@@ -414,6 +462,21 @@ def add_features(
             (pl.col("i_tx_30d") / (pl.col("i_tx_count") + 1.0)).alias("i_recent_30_share"),
             (pl.col("u_cat_l1_tx_count") / (pl.col("u_tx_count") + 1.0)).alias(
                 "u_cat_l1_share"
+            ),
+            (pl.col("u_cat_l2_tx_count") / (pl.col("u_tx_count") + 1.0)).alias(
+                "u_cat_l2_share"
+            ),
+            (pl.col("u_cat_l3_tx_count") / (pl.col("u_tx_count") + 1.0)).alias(
+                "u_cat_l3_share"
+            ),
+            (pl.col("u_category_tx_count") / (pl.col("u_tx_count") + 1.0)).alias(
+                "u_category_share"
+            ),
+            (pl.col("i_tx_count") / (pl.col("category_tx_count") + 1.0)).alias(
+                "category_item_tx_share"
+            ),
+            (pl.col("i_tx_90d") / (pl.col("category_tx_90d") + 1.0)).alias(
+                "category_item_recent_share"
             ),
             (pl.col("loc_i_tx_count") / (pl.col("i_tx_count") + 1.0)).alias(
                 "loc_i_share_of_item_tx"

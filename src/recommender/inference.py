@@ -93,6 +93,9 @@ def build_scored_chunk(
         recent_global_top=args.popular_top,
         recent_location_top=args.location_top,
         cobuy_top=args.cobuy_top,
+        category_top=args.category_top,
+        brand_top=args.brand_top,
+        item_lf=item_lf,
         cache_dir=None if args.no_candidate_cache else Path(args.candidate_cache_dir),
         refresh_cache=args.refresh_candidate_cache,
     )
@@ -243,6 +246,9 @@ def evaluate_month_chunked(
             recent_global_top=args.popular_top,
             recent_location_top=args.location_top,
             cobuy_top=args.cobuy_top,
+            category_top=args.category_top,
+            brand_top=args.brand_top,
+            item_lf=item_lf,
             cache_dir=None if args.no_candidate_cache else Path(args.candidate_cache_dir),
             refresh_cache=args.refresh_candidate_cache,
         )

@@ -41,6 +41,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--popular-top", type=int, default=60)
     parser.add_argument("--location-top", type=int, default=50)
     parser.add_argument(
+        "--category-top",
+        type=int,
+        default=20,
+        help="Recent popular items kept per recent user category. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--brand-top",
+        type=int,
+        default=20,
+        help="Recent popular items kept per recent user brand. Use 0 to disable.",
+    )
+    parser.add_argument(
         "--cobuy-top",
         type=int,
         default=20,

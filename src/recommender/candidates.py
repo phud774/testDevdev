@@ -6,7 +6,9 @@ import polars as pl
 
 from .constants import (
     BILL_COL,
+    BRAND_COL,
     CANDIDATE_SOURCE_COLS,
+    CAT_COL,
     DATE_COL,
     ITEM_COL,
     LOC_COL,
@@ -61,6 +63,13 @@ def _empty_cobuy_items() -> pl.LazyFrame:
     ).lazy()
 
 
+def _empty_candidates() -> pl.LazyFrame:
+    return pl.DataFrame(
+        {USER_COL: [], ITEM_COL: []},
+        schema={USER_COL: pl.Int64, ITEM_COL: pl.Utf8},
+    ).lazy()
+
+
 def _hash_item_values(values: list[str]) -> str:
     digest = hashlib.sha1()
     for value in sorted(values):
@@ -89,6 +98,9 @@ def build_candidates(
     recent_global_top: int,
     recent_location_top: int,
     cobuy_top: int = 20,
+    category_top: int = 20,
+    brand_top: int = 20,
+    item_lf: pl.LazyFrame | None = None,
     cache_dir: Path | None = None,
     refresh_cache: bool = False,
 ) -> pl.DataFrame:
@@ -97,6 +109,11 @@ def build_candidates(
 
     recent_hist = hist.filter(pl.col(DATE_COL) >= pl.lit(cutoff).dt.offset_by(f"-{recent_days}d"))
     personal_hist = hist.filter(pl.col(DATE_COL) >= pl.lit(cutoff).dt.offset_by(f"-{personal_days}d"))
+    item_meta = (
+        item_lf.select(ITEM_COL, CAT_COL, BRAND_COL).unique(subset=[ITEM_COL], keep="first")
+        if item_lf is not None
+        else None
+    )
 
     personal = (
         personal_hist.join(user_lf, on=USER_COL, how="inner")
@@ -220,6 +237,90 @@ def build_candidates(
         "candidate_recent_location",
     )
 
+    if item_meta is not None and category_top > 0:
+        recent_meta = recent_hist.join(item_meta, on=ITEM_COL, how="left")
+        user_categories = (
+            recent_meta.join(user_lf, on=USER_COL, how="inner")
+            .drop_nulls(CAT_COL)
+            .group_by([USER_COL, CAT_COL])
+            .agg(pl.len().alias("user_category_count"), pl.max(DATE_COL).alias("user_category_last_date"))
+            .sort(
+                [USER_COL, "user_category_count", "user_category_last_date"],
+                descending=[False, True, True],
+            )
+            .group_by(USER_COL)
+            .head(5)
+            .select(USER_COL, CAT_COL)
+        )
+        category_items = _cached_lazy(
+            recent_meta.drop_nulls(CAT_COL)
+            .group_by([CAT_COL, ITEM_COL])
+            .agg(pl.len().alias("category_item_count"), pl.max(DATE_COL).alias("category_item_last_date"))
+            .sort(
+                [CAT_COL, "category_item_count", "category_item_last_date"],
+                descending=[False, True, True],
+            )
+            .group_by(CAT_COL)
+            .head(category_top)
+            .select(CAT_COL, ITEM_COL),
+            _cache_path(
+                cache_dir,
+                cutoff,
+                "recent_category_items",
+                days=recent_days,
+                top=category_top,
+            ),
+            refresh_cache,
+        )
+        category_candidates = _mark_source(
+            user_categories.join(category_items, on=CAT_COL, how="inner"),
+            "candidate_recent_category",
+        )
+    else:
+        category_candidates = _mark_source(_empty_candidates(), "candidate_recent_category")
+
+    if item_meta is not None and brand_top > 0:
+        recent_meta = recent_hist.join(item_meta, on=ITEM_COL, how="left")
+        user_brands = (
+            recent_meta.join(user_lf, on=USER_COL, how="inner")
+            .drop_nulls(BRAND_COL)
+            .group_by([USER_COL, BRAND_COL])
+            .agg(pl.len().alias("user_brand_count"), pl.max(DATE_COL).alias("user_brand_last_date"))
+            .sort(
+                [USER_COL, "user_brand_count", "user_brand_last_date"],
+                descending=[False, True, True],
+            )
+            .group_by(USER_COL)
+            .head(8)
+            .select(USER_COL, BRAND_COL)
+        )
+        brand_items = _cached_lazy(
+            recent_meta.drop_nulls(BRAND_COL)
+            .group_by([BRAND_COL, ITEM_COL])
+            .agg(pl.len().alias("brand_item_count"), pl.max(DATE_COL).alias("brand_item_last_date"))
+            .sort(
+                [BRAND_COL, "brand_item_count", "brand_item_last_date"],
+                descending=[False, True, True],
+            )
+            .group_by(BRAND_COL)
+            .head(brand_top)
+            .select(BRAND_COL, ITEM_COL),
+            _cache_path(
+                cache_dir,
+                cutoff,
+                "recent_brand_items",
+                days=recent_days,
+                top=brand_top,
+            ),
+            refresh_cache,
+        )
+        brand_candidates = _mark_source(
+            user_brands.join(brand_items, on=BRAND_COL, how="inner"),
+            "candidate_recent_brand",
+        )
+    else:
+        brand_candidates = _mark_source(_empty_candidates(), "candidate_recent_brand")
+
     if cobuy_top > 0 and personal_top > 0:
         recent_user_items = (
             recent_hist.join(user_lf, on=USER_COL, how="inner")
@@ -298,6 +399,8 @@ def build_candidates(
                 location_candidates,
                 recent_global_candidates,
                 recent_location_candidates,
+                category_candidates,
+                brand_candidates,
                 cobuy_candidates,
             ]
         )
