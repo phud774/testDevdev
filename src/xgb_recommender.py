@@ -7,13 +7,13 @@ from recommender.data import scan_items, scan_transactions
 from recommender.dataset import build_training_dataset_for_month
 from recommender.evaluation import evaluate_submission_dict
 from recommender.inference import evaluate_month_chunked, predict_month_chunked
-from recommender.model import train_xgboost
+from recommender.model import train_model
 from recommender.time_utils import month_minus, previous_months
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Feature engineering + XGBoost training pipeline for monthly item recommendation."
+        description="Feature engineering + model training pipeline for monthly item recommendation."
     )
     parser.add_argument("--data", default="data/transaction_full_2025.parquet")
     parser.add_argument("--items", default="data/items.parquet")
@@ -63,6 +63,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--refresh-candidate-cache", action="store_true")
 
     parser.add_argument("--negative-ratio", type=float, default=6.0)
+    parser.add_argument(
+        "--model",
+        choices=["xgboost", "lightgbm", "linear_regression"],
+        default="xgboost",
+        help="Model backend used to score candidates.",
+    )
     parser.add_argument("--n-estimators", type=int, default=500)
     parser.add_argument("--early-stopping-rounds", type=int, default=50)
     parser.add_argument("--n-jobs", type=int, default=0)
@@ -71,15 +77,18 @@ def parse_args() -> argparse.Namespace:
         choices=["rank_ndcg", "rank_pairwise", "binary"],
         default="rank_ndcg",
         help=(
-            "XGBoost learning objective. Ranking modes use customer_id groups "
-            "and optimize top-k ordering directly."
+            "Tree model learning objective. Ranking modes use customer_id groups "
+            "and optimize top-k ordering directly. Ignored by --model linear_regression."
         ),
     )
     parser.add_argument(
         "--xgb-device",
         choices=["cpu", "cuda"],
         default="cpu",
-        help="XGBoost device. Use cuda to train and predict with GPU when XGBoost has CUDA support.",
+        help=(
+            "Tree model device. For XGBoost, cuda requires CUDA-enabled XGBoost. "
+            "For LightGBM, cuda requests LightGBM GPU mode."
+        ),
     )
     parser.add_argument(
         "--use-ground-truth-users",
@@ -180,6 +189,8 @@ def build_train_frame(lf, train_months: list[str], args: argparse.Namespace, ite
 def best_tree_count(model, default_n_estimators: int) -> int:
     if hasattr(model, "best_iteration") and model.best_iteration is not None:
         return int(model.best_iteration) + 1
+    if hasattr(model, "best_iteration_") and model.best_iteration_:
+        return int(model.best_iteration_)
     return default_n_estimators
 
 
@@ -208,7 +219,7 @@ def main() -> None:
         item_lf=item_lf,
     )
 
-    model = train_xgboost(train_df, val_df, args)
+    model = train_model(train_df, val_df, args)
     evaluate_month_chunked(
         model,
         lf,
@@ -229,7 +240,7 @@ def main() -> None:
             f"({len(train_df):,} train + {len(val_df):,} validation) "
             f"with n_estimators={n_estimators}"
         )
-        final_model = train_xgboost(
+        final_model = train_model(
             final_train_df,
             None,
             args,

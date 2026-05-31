@@ -13,6 +13,7 @@ from .data import iter_user_chunks, iter_users_before_cutoff_from_parquet, targe
 from .dataset import add_labels, build_dataset_for_users
 from .evaluation import CandidateCoverageStats, load_candidate_coverage_stats, precision_at_10_from_scores
 from .features import add_features
+from .model import predict_model_scores, supports_log_loss
 from .time_utils import parse_month
 
 
@@ -50,26 +51,7 @@ def write_submission_entries(
 
 
 def predict_scores(model, feature_frame: pd.DataFrame, args: argparse.Namespace) -> np.ndarray:
-    values = feature_frame.to_numpy(dtype=np.float32, copy=False)
-    use_ranker = getattr(args, "xgb_objective", "binary") != "binary"
-    if args.xgb_device == "cuda":
-        try:
-            import cupy as cp
-        except ImportError:
-            if use_ranker:
-                return model.predict(values)
-            return model.predict_proba(values)[:, 1]
-
-        gpu_values = cp.asarray(values)
-        if use_ranker:
-            scores = model.predict(gpu_values)
-        else:
-            scores = model.predict_proba(gpu_values)[:, 1]
-        return cp.asnumpy(scores)
-
-    if use_ranker:
-        return model.predict(values)
-    return model.predict_proba(values)[:, 1]
+    return predict_model_scores(model, feature_frame, args)
 
 
 def build_scored_chunk(
@@ -261,7 +243,7 @@ def evaluate_month_chunked(
         chunk[FEATURE_COLS] = chunk[FEATURE_COLS].astype(np.float32)
         chunk["score"] = predict_scores(model, chunk[FEATURE_COLS], args)
         precisions.append(precision_at_10_from_scores(chunk))
-        if getattr(args, "xgb_objective", "binary") == "binary":
+        if supports_log_loss(args):
             losses.append(log_loss(chunk["label"], np.clip(chunk["score"], 1e-6, 1 - 1e-6)))
         submission.update(top_k_from_scored(chunk, k=10))
         print(

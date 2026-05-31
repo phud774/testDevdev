@@ -8,3 +8,4 @@ tqdm
 scipy 
 scikit-learn
 xgboost
+lightgbm
