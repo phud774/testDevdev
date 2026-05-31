@@ -48,12 +48,6 @@ def parse_args() -> argparse.Namespace:
         help="Negative samples kept per positive. Use a large value to keep more negatives.",
     )
     parser.add_argument(
-        "--hard-negative-share",
-        type=float,
-        default=0.7,
-        help="Share of sampled negatives chosen by hard-negative score before random fill.",
-    )
-    parser.add_argument(
         "--sort-by",
         default="abs_spearman",
         choices=["abs_pearson", "abs_spearman", "auc_lift", "ap_lift", "positive_rate_lift"],
