@@ -48,25 +48,56 @@ python src/xgb_recommender.py --train-months 2025-06,2025-07,2025-08
 
 ## Candidate generation và feature engineering
 
-Pipeline tạo candidates dựa trên nhiều nguồn:
+Pipeline không score toàn bộ item cho mỗi user. Thay vào đó, nó tạo một tập candidate nhỏ hơn từ nhiều nguồn, sau đó model sẽ rank lại các candidate này.
 
-- Items user từng tương tác trong lịch sử.
-- Items phổ biến toàn cục.
-- Items phổ biến theo location.
-- Items phổ biến theo category gần đây của user.
-- Items phổ biến theo brand gần đây của user.
-- Items co-buy từ các item user đã mua/tương tác.
+Các nguồn candidate hiện tại:
+
+- `candidate_personal`: item user tương tác trong `--history-days` gần nhất, lấy tối đa `--candidate-top` item mỗi user.
+- `candidate_repeat_all`: item user từng tương tác trong toàn bộ lịch sử trước cutoff, cũng lấy tối đa `--candidate-top` item mỗi user.
+- `candidate_global`: item phổ biến toàn cục, lấy tối đa `--popular-top` item và cross join cho mọi user.
+- `candidate_location`: item phổ biến theo location cuối cùng của user, lấy tối đa `--location-top` item cho location đó.
+- `candidate_recent_global`: item phổ biến toàn cục trong `--recent-days` gần nhất. Trong pipeline hiện tại, giá trị này được truyền bằng `--popular-top`.
+- `candidate_recent_location`: item phổ biến theo location trong `--recent-days` gần nhất. Trong pipeline hiện tại, giá trị này được truyền bằng `--location-top`.
+- `candidate_recent_category`: lấy tối đa 5 category gần đây của user, rồi với mỗi category lấy tối đa `--category-top` item.
+- `candidate_recent_brand`: lấy tối đa 8 brand gần đây của user, rồi với mỗi brand lấy tối đa `--brand-top` item.
+- `candidate_cobuy`: từ các item gần đây của user, tìm item thường được mua chung. `--cobuy-top` là số co-buy item tối đa cho mỗi anchor item, nhưng sau khi gom theo user thì nhánh này bị giới hạn lại tối đa `--candidate-top` item mỗi user.
 
 Các tham số chính:
 
-- `--history-days`: số ngày lịch sử dùng để tạo feature, mặc định `270`.
-- `--recent-days`: cửa sổ recent behavior, mặc định `90`.
-- `--candidate-top`: số candidate chính, mặc định `80`.
-- `--popular-top`: số item phổ biến toàn cục, mặc định `60`.
-- `--location-top`: số item theo location, mặc định `50`.
-- `--category-top`: số item theo category, mặc định `20`.
-- `--brand-top`: số item theo brand, mặc định `20`.
-- `--cobuy-top`: số item co-buy mỗi anchor item, mặc định `20`.
+- `--history-days`: số ngày lịch sử dùng cho nhánh personal và feature lịch sử, mặc định `270`.
+- `--recent-days`: cửa sổ hành vi gần đây, mặc định `90`.
+- `--candidate-top`: giới hạn cho `candidate_personal`, `candidate_repeat_all`, và giới hạn cuối của `candidate_cobuy`, mặc định `80`.
+- `--popular-top`: số item phổ biến toàn cục, đồng thời cũng dùng cho recent global candidates, mặc định `60`. Đặt `0` để tắt.
+- `--location-top`: số item theo location, đồng thời cũng dùng cho recent location candidates, mặc định `50`. Đặt `0` để tắt.
+- `--category-top`: số item tối đa mỗi category gần đây của user, mặc định `20`. Đặt `0` để tắt.
+- `--brand-top`: số item tối đa mỗi brand gần đây của user, mặc định `20`. Đặt `0` để tắt.
+- `--cobuy-top`: số item co-buy tối đa mỗi anchor item, mặc định `20`. Đặt `0` để tắt.
+
+Lưu ý: tổng candidate cuối cùng không đơn giản là cộng các tham số trên. Sau khi concat tất cả nguồn candidate, pipeline deduplicate theo cặp `(customer_id, item_id)`. Nếu cùng một item xuất hiện từ nhiều nguồn, item đó chỉ còn một dòng candidate, còn các cột source sẽ đánh dấu nó đến từ những nguồn nào.
+
+Ví dụ với cấu hình:
+
+```bash
+--candidate-top 30 --category-top 10 --brand-top 0 --popular-top 0 --location-top 15 --cobuy-top 15
+```
+
+Upper bound thô theo mỗi user xấp xỉ:
+
+```text
+candidate_personal         30
+candidate_repeat_all       30
+candidate_location         15
+candidate_recent_location  15
+candidate_recent_category  up to 5 * 10 = 50
+candidate_cobuy            up to 30
+candidate_global            0
+candidate_recent_global     0
+candidate_recent_brand      0
+-----------------------------
+raw upper bound             ~170
+```
+
+Con số thực tế thường thấp hơn vì nhiều item bị trùng giữa các nguồn và được gộp lại.
 
 Candidate cache được lưu mặc định ở:
 
