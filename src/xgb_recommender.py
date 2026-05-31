@@ -63,6 +63,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--refresh-candidate-cache", action="store_true")
 
     parser.add_argument("--negative-ratio", type=float, default=6.0)
+    parser.add_argument(
+        "--hard-negative-share",
+        type=float,
+        default=0.7,
+        help="Share of sampled negatives chosen by hard-negative score before random fill.",
+    )
     parser.add_argument("--n-estimators", type=int, default=500)
     parser.add_argument("--early-stopping-rounds", type=int, default=50)
     parser.add_argument("--n-jobs", type=int, default=0)

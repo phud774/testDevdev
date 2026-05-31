@@ -6,7 +6,7 @@ import pandas as pd
 import polars as pl
 
 from .candidates import build_candidates
-from .constants import DATE_COL, FEATURE_COLS, ITEM_COL, USER_COL
+from .constants import CANDIDATE_SOURCE_COLS, DATE_COL, FEATURE_COLS, ITEM_COL, USER_COL
 from .data import iter_user_chunks, target_users_for_month
 from .features import add_features
 from .time_utils import MonthWindow, parse_month
@@ -26,14 +26,63 @@ def add_labels(lf: pl.LazyFrame, features: pl.DataFrame, target: MonthWindow) ->
     )
 
 
-def downsample_negatives(df: pd.DataFrame, negative_ratio: float, seed: int) -> pd.DataFrame:
+def hard_negative_scores(negatives: pd.DataFrame) -> pd.Series:
+    scores = pd.Series(0.0, index=negatives.index)
+    weighted_cols = {
+        "candidate_source_count": 2.0,
+        "ui_tx_count": 3.0,
+        "ui_tx_90d": 2.0,
+        "u_category_tx_count": 1.5,
+        "u_brand_tx_count": 1.5,
+        "u_category_tx_90d": 1.8,
+        "u_brand_tx_90d": 1.8,
+        "i_tx_90d": 0.5,
+        "loc_item_tx_90d": 0.8,
+    }
+    for col, weight in weighted_cols.items():
+        if col in negatives.columns:
+            scores += negatives[col].fillna(0).astype(np.float32) * weight
+    for col in CANDIDATE_SOURCE_COLS:
+        if col in negatives.columns:
+            scores += negatives[col].fillna(0).astype(np.float32)
+    return scores
+
+
+def downsample_negatives(
+    df: pd.DataFrame,
+    negative_ratio: float,
+    seed: int,
+    hard_negative_share: float = 0.7,
+) -> pd.DataFrame:
     positives = df[df["label"] == 1]
     negatives = df[df["label"] == 0]
     if positives.empty or negatives.empty:
         return df
 
     n_neg = min(len(negatives), int(len(positives) * negative_ratio))
-    sampled_negatives = negatives.sample(n=n_neg, random_state=seed)
+    if n_neg >= len(negatives):
+        sampled_negatives = negatives
+    else:
+        n_hard = int(n_neg * max(0.0, min(hard_negative_share, 1.0)))
+        if n_hard > 0:
+            hard_scores = hard_negative_scores(negatives)
+            hard_negatives = negatives.assign(_hard_negative_score=hard_scores)
+            hard_negatives = (
+                hard_negatives.sort_values("_hard_negative_score", ascending=False)
+                .head(n_hard)
+                .drop(columns="_hard_negative_score")
+            )
+        else:
+            hard_negatives = negatives.head(0)
+
+        n_random = n_neg - len(hard_negatives)
+        random_pool = negatives.drop(index=hard_negatives.index)
+        random_negatives = (
+            random_pool.sample(n=min(n_random, len(random_pool)), random_state=seed)
+            if n_random > 0 and not random_pool.empty
+            else negatives.head(0)
+        )
+        sampled_negatives = pd.concat([hard_negatives, random_negatives], ignore_index=False)
     return (
         pd.concat([positives, sampled_negatives], ignore_index=True)
         .sample(frac=1.0, random_state=seed)
@@ -101,7 +150,12 @@ def build_training_dataset_for_month(
         total_rows += len(chunk)
         total_pos += int(chunk["label"].sum())
         sampled = (
-            downsample_negatives(chunk, args.negative_ratio, seed=seed + chunk_id)
+            downsample_negatives(
+                chunk,
+                args.negative_ratio,
+                seed=seed + chunk_id,
+                hard_negative_share=getattr(args, "hard_negative_share", 0.7),
+            )
             if downsample
             else chunk
         )

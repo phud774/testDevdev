@@ -32,6 +32,8 @@ CANDIDATE_SOURCE_COLS = [
     "candidate_global",
 ]
 
+CANDIDATE_RANK_COLS = [f"{col}_rank" for col in CANDIDATE_SOURCE_COLS]
+
 FEATURE_COLS = [
     "ui_tx_count",
     "ui_qty_sum",
@@ -127,4 +129,13 @@ FEATURE_COLS = [
     "candidate_location",
     "candidate_recent_location",
     "candidate_source_count",
+    "candidate_personal_rank",
+    "candidate_repeat_all_rank",
+    "candidate_cobuy_rank",
+    "candidate_recent_category_rank",
+    "candidate_recent_brand_rank",
+    "candidate_recent_global_rank",
+    "candidate_recent_location_rank",
+    "candidate_location_rank",
+    "candidate_global_rank",
 ]

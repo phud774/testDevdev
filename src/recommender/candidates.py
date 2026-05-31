@@ -7,6 +7,7 @@ import polars as pl
 from .constants import (
     BILL_COL,
     BRAND_COL,
+    CANDIDATE_RANK_COLS,
     CANDIDATE_SOURCE_COLS,
     CAT_COL,
     DATE_COL,
@@ -78,11 +79,24 @@ def _hash_item_values(values: list[str]) -> str:
     return digest.hexdigest()[:16]
 
 
-def _mark_source(frame: pl.LazyFrame, source_col: str) -> pl.LazyFrame:
+def _mark_source(
+    frame: pl.LazyFrame,
+    source_col: str,
+    rank_col: str | None = None,
+) -> pl.LazyFrame:
+    source_rank_col = f"{source_col}_rank"
     return frame.select(
         USER_COL,
         ITEM_COL,
         *[pl.lit(1 if col == source_col else 0).alias(col) for col in CANDIDATE_SOURCE_COLS],
+        *[
+            (
+                pl.col(rank_col).cast(pl.Float32).alias(col)
+                if col == source_rank_col and rank_col is not None
+                else pl.lit(None).cast(pl.Float32).alias(col)
+            )
+            for col in CANDIDATE_RANK_COLS
+        ],
     )
 
 
@@ -122,6 +136,12 @@ def build_candidates(
             pl.len().alias("candidate_personal_count"),
             pl.max(DATE_COL).alias("candidate_personal_last_date"),
         )
+        .with_columns(
+            pl.col("candidate_personal_count")
+            .rank(method="ordinal", descending=True)
+            .over(USER_COL)
+            .alias("candidate_personal_rank")
+        )
         .sort(
             [USER_COL, "candidate_personal_count", "candidate_personal_last_date"],
             descending=[False, True, True],
@@ -129,7 +149,7 @@ def build_candidates(
         .group_by(USER_COL)
         .head(personal_top)
     )
-    personal = _mark_source(personal, "candidate_personal")
+    personal = _mark_source(personal, "candidate_personal", "candidate_personal_rank")
 
     repeat_all = (
         hist.join(user_lf, on=USER_COL, how="inner")
@@ -138,11 +158,17 @@ def build_candidates(
             pl.len().alias("repeat_count"),
             pl.max(DATE_COL).alias("repeat_last_date"),
         )
+        .with_columns(
+            pl.col("repeat_count")
+            .rank(method="ordinal", descending=True)
+            .over(USER_COL)
+            .alias("candidate_repeat_all_rank")
+        )
         .sort([USER_COL, "repeat_count", "repeat_last_date"], descending=[False, True, True])
         .group_by(USER_COL)
         .head(personal_top)
     )
-    repeat_all = _mark_source(repeat_all, "candidate_repeat_all")
+    repeat_all = _mark_source(repeat_all, "candidate_repeat_all", "candidate_repeat_all_rank")
 
     if global_top > 0:
         global_items = _cached_lazy(
@@ -150,13 +176,20 @@ def build_candidates(
             .agg(pl.len().alias("global_count"))
             .sort("global_count", descending=True)
             .head(global_top)
-            .select(ITEM_COL),
+            .with_row_index("candidate_global_rank", offset=1)
+            .select(ITEM_COL, "candidate_global_rank"),
             _cache_path(cache_dir, cutoff, "global_items", top=global_top),
             refresh_cache,
         )
     else:
-        global_items = _empty_items()
-    global_candidates = _mark_source(user_lf.join(global_items, how="cross"), "candidate_global")
+        global_items = _empty_items().with_columns(
+            pl.lit(None).cast(pl.Float32).alias("candidate_global_rank")
+        )
+    global_candidates = _mark_source(
+        user_lf.join(global_items, how="cross"),
+        "candidate_global",
+        "candidate_global_rank",
+    )
 
     if recent_global_top > 0:
         recent_global_items = _cached_lazy(
@@ -164,7 +197,8 @@ def build_candidates(
             .agg(pl.len().alias("recent_global_count"))
             .sort("recent_global_count", descending=True)
             .head(recent_global_top)
-            .select(ITEM_COL),
+            .with_row_index("candidate_recent_global_rank", offset=1)
+            .select(ITEM_COL, "candidate_recent_global_rank"),
             _cache_path(
                 cache_dir,
                 cutoff,
@@ -175,10 +209,13 @@ def build_candidates(
             refresh_cache,
         )
     else:
-        recent_global_items = _empty_items()
+        recent_global_items = _empty_items().with_columns(
+            pl.lit(None).cast(pl.Float32).alias("candidate_recent_global_rank")
+        )
     recent_global_candidates = _mark_source(
         user_lf.join(recent_global_items, how="cross"),
         "candidate_recent_global",
+        "candidate_recent_global_rank",
     )
 
     user_location = (
@@ -198,15 +235,18 @@ def build_candidates(
                 .alias("location_rank")
             )
             .filter(pl.col("location_rank") <= location_top)
-            .select(LOC_COL, ITEM_COL),
+            .select(LOC_COL, ITEM_COL, "location_rank"),
             _cache_path(cache_dir, cutoff, "location_items", top=location_top),
             refresh_cache,
         )
     else:
-        location_items = _empty_location_items()
+        location_items = _empty_location_items().with_columns(
+            pl.lit(None).cast(pl.Float32).alias("location_rank")
+        )
     location_candidates = _mark_source(
         user_location.join(location_items, on=LOC_COL, how="inner"),
         "candidate_location",
+        "location_rank",
     )
 
     if recent_location_top > 0:
@@ -220,7 +260,7 @@ def build_candidates(
                 .alias("recent_location_rank")
             )
             .filter(pl.col("recent_location_rank") <= recent_location_top)
-            .select(LOC_COL, ITEM_COL),
+            .select(LOC_COL, ITEM_COL, "recent_location_rank"),
             _cache_path(
                 cache_dir,
                 cutoff,
@@ -231,10 +271,13 @@ def build_candidates(
             refresh_cache,
         )
     else:
-        recent_location_items = _empty_location_items()
+        recent_location_items = _empty_location_items().with_columns(
+            pl.lit(None).cast(pl.Float32).alias("recent_location_rank")
+        )
     recent_location_candidates = _mark_source(
         user_location.join(recent_location_items, on=LOC_COL, how="inner"),
         "candidate_recent_location",
+        "recent_location_rank",
     )
 
     if item_meta is not None and category_top > 0:
@@ -260,9 +303,12 @@ def build_candidates(
                 [CAT_COL, "category_item_count", "category_item_last_date"],
                 descending=[False, True, True],
             )
+            .with_columns(
+                (pl.int_range(pl.len()).over(CAT_COL) + 1).alias("category_item_rank")
+            )
             .group_by(CAT_COL)
             .head(category_top)
-            .select(CAT_COL, ITEM_COL),
+            .select(CAT_COL, ITEM_COL, "category_item_rank"),
             _cache_path(
                 cache_dir,
                 cutoff,
@@ -275,6 +321,7 @@ def build_candidates(
         category_candidates = _mark_source(
             user_categories.join(category_items, on=CAT_COL, how="inner"),
             "candidate_recent_category",
+            "category_item_rank",
         )
     else:
         category_candidates = _mark_source(_empty_candidates(), "candidate_recent_category")
@@ -302,9 +349,12 @@ def build_candidates(
                 [BRAND_COL, "brand_item_count", "brand_item_last_date"],
                 descending=[False, True, True],
             )
+            .with_columns(
+                (pl.int_range(pl.len()).over(BRAND_COL) + 1).alias("brand_item_rank")
+            )
             .group_by(BRAND_COL)
             .head(brand_top)
-            .select(BRAND_COL, ITEM_COL),
+            .select(BRAND_COL, ITEM_COL, "brand_item_rank"),
             _cache_path(
                 cache_dir,
                 cutoff,
@@ -317,6 +367,7 @@ def build_candidates(
         brand_candidates = _mark_source(
             user_brands.join(brand_items, on=BRAND_COL, how="inner"),
             "candidate_recent_brand",
+            "brand_item_rank",
         )
     else:
         brand_candidates = _mark_source(_empty_candidates(), "candidate_recent_brand")
@@ -378,12 +429,18 @@ def build_candidates(
             recent_user_items.join(co_items, on="anchor_item", how="inner")
             .group_by([USER_COL, "co_item"])
             .agg(pl.sum("cobuy_count").alias("cobuy_score"))
+            .with_columns(
+                pl.col("cobuy_score")
+                .rank(method="ordinal", descending=True)
+                .over(USER_COL)
+                .alias("candidate_cobuy_rank")
+            )
             .sort([USER_COL, "cobuy_score"], descending=[False, True])
             .group_by(USER_COL)
             .head(personal_top)
             .rename({"co_item": ITEM_COL})
         )
-        cobuy_candidates = _mark_source(cobuy_candidates, "candidate_cobuy")
+        cobuy_candidates = _mark_source(cobuy_candidates, "candidate_cobuy", "candidate_cobuy_rank")
     else:
         cobuy_candidates = _mark_source(
             user_lf.select(USER_COL).head(0).with_columns(pl.lit("").alias(ITEM_COL)),
@@ -405,9 +462,13 @@ def build_candidates(
             ]
         )
         .group_by([USER_COL, ITEM_COL])
-        .agg(*[pl.max(col).alias(col) for col in CANDIDATE_SOURCE_COLS])
+        .agg(
+            *[pl.max(col).alias(col) for col in CANDIDATE_SOURCE_COLS],
+            *[pl.min(col).alias(col) for col in CANDIDATE_RANK_COLS],
+        )
         .with_columns(
-            sum(pl.col(col) for col in CANDIDATE_SOURCE_COLS).alias("candidate_source_count")
+            sum(pl.col(col) for col in CANDIDATE_SOURCE_COLS).alias("candidate_source_count"),
+            *[pl.col(col).fill_null(0) for col in CANDIDATE_RANK_COLS],
         )
         .collect(engine="streaming")
     )
