@@ -75,30 +75,6 @@ Các tham số chính:
 
 Lưu ý: tổng candidate cuối cùng không đơn giản là cộng các tham số trên. Sau khi concat tất cả nguồn candidate, pipeline deduplicate theo cặp `(customer_id, item_id)`. Nếu cùng một item xuất hiện từ nhiều nguồn, item đó chỉ còn một dòng candidate, còn các cột source sẽ đánh dấu nó đến từ những nguồn nào.
 
-Ví dụ với cấu hình:
-
-```bash
---candidate-top 30 --category-top 10 --brand-top 0 --popular-top 0 --location-top 15 --cobuy-top 15
-```
-
-Upper bound thô theo mỗi user xấp xỉ:
-
-```text
-candidate_personal         30
-candidate_repeat_all       30
-candidate_location         15
-candidate_recent_location  15
-candidate_recent_category  up to 5 * 10 = 50
-candidate_cobuy            up to 30
-candidate_global            0
-candidate_recent_global     0
-candidate_recent_brand      0
------------------------------
-raw upper bound             ~170
-```
-
-Con số thực tế thường thấp hơn vì nhiều item bị trùng giữa các nguồn và được gộp lại.
-
 Candidate cache được lưu mặc định ở:
 
 ```text
